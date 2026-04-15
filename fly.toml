@@ -1,0 +1,29 @@
+# Fly.io app configuration
+# Run `fly launch` to generate your app name, then replace below.
+
+app = "your-app-name"          # ← replace with your Fly.io app name after `fly launch`
+primary_region = "sin"         # Singapore — closest to India. Options: sin, bom, nrt, lax
+
+[build]
+  # No Dockerfile needed — Fly auto-detects Node.js via package.json
+
+[env]
+  NODE_ENV = "production"
+  PORT     = "3000"
+
+[http_service]
+  internal_port        = 3000
+  force_https          = true
+  auto_stop_machines   = true   # free tier: stops when idle
+  auto_start_machines  = true   # wakes up on first connection
+  min_machines_running = 0      # set to 1 if you want always-on (paid)
+
+  [http_service.concurrency]
+    type       = "connections"
+    hard_limit = 100
+    soft_limit = 80
+
+[[vm]]
+  memory = "256mb"
+  cpu_kind = "shared"
+  cpus     = 1
