@@ -440,17 +440,36 @@
 
     let ws = null;
 
-    function connectToRoom() {
-      // Pick a random Kerala room
-      const room = ROOMS[Math.floor(Math.random() * ROOMS.length)];
-      const wsUrl = MATCHMAKER_URL.replace(/^http/, 'ws') + '/room?room=' + room;
-      console.log('Connecting to room:', room, wsUrl);
+function connectToRoom() {
+  const room = ROOMS[Math.floor(Math.random() * ROOMS.length)];
 
-      ws = new WebSocket(wsUrl);
+  const wsUrl = `wss://slither-kerala.razikv-co-in.workers.dev/room?room=${room}`;
 
-      ws.addEventListener('open', () => {
-        console.log('WebSocket connected, room:', room);
-      });
+  console.log('Connecting to room:', room, wsUrl);
+
+  ws = new WebSocket(wsUrl);
+
+  ws.onopen = () => {
+    console.log('Connected');
+  };
+
+  ws.onerror = (err) => {
+    console.error('WebSocket error:', err);
+  };
+
+  ws.onclose = () => {
+    console.log('WebSocket closed');
+    if (gameRunning) {
+      setTimeout(connectToRoom, 2000);
+    }
+  };
+
+  ws.onmessage = (event) => {
+    let msg;
+    try { msg = JSON.parse(event.data); } catch { return; }
+    handleServerMessage(msg);
+  };
+}
 
       ws.addEventListener('message', (event) => {
         let msg;
