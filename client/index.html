@@ -1172,34 +1172,34 @@
     });
 
     document.addEventListener('touchstart', (event) => {
-      const touch = event.changedTouches[0];
-      if (!touch) return;
-      pointer.touchId = touch.identifier;
-      pointer.touchStartAt = performance.now();
-      pointer.active = true;
-      pointer.boosting = false;
-      setPointerFromClient(touch.clientX, touch.clientY);
-      event.preventDefault();
-    }, { passive: false });
+  const touch = event.touches[0];
+  if (!touch) return;
+
+  pointer.touchId = touch.identifier;
+  pointer.touchStartAt = performance.now();
+
+  pointer.x = touch.clientX;
+  pointer.y = touch.clientY;
+
+  pointer.boosting = false;
+  pointer.active = true;
+}, { passive: false });
 
     document.addEventListener('touchmove', (event) => {
-      const touches = Array.from(event.touches);
-      const touch = touches.find((item) => item.identifier === pointer.touchId) || event.touches[0];
-      if (!touch) return;
-      setPointerFromClient(touch.clientX, touch.clientY);
-      pointer.boosting = performance.now() - pointer.touchStartAt > 140;
-      event.preventDefault();
-    }, { passive: false });
+  const touch = Array.from(event.touches).find(t => t.identifier === pointer.touchId) || event.touches[0];
+  if (!touch) return;
 
-    document.addEventListener('touchend', (event) => {
-      const changedTouches = Array.from(event.changedTouches);
-      const ended = changedTouches.find((item) => item.identifier === pointer.touchId);
-      if (!ended) return;
-      pointer.active = false;
-      pointer.boosting = false;
-      pointer.touchId = null;
-      event.preventDefault();
-    }, { passive: false });
+  pointer.x = touch.clientX;
+  pointer.y = touch.clientY;
+
+  pointer.boosting = (performance.now() - pointer.touchStartAt) > 150;
+}, { passive: false });
+
+document.addEventListener('touchend', () => {
+  pointer.active = false;
+  pointer.boosting = false;
+  pointer.touchId = null;
+}, { passive: false });
 
     document.addEventListener('touchcancel', () => {
       pointer.active = false;
