@@ -1,11 +1,13 @@
 {
   "name": "slither-clone-multiplayer",
   "version": "1.0.0",
-  "description": "Multiplayer Slither Game",
+  "description": "Multiplayer Slither — Kerala Arena",
   "main": "server/server.js",
   "scripts": {
     "start": "node server/server.js",
-    "dev": "node server/server.js"
+    "dev:server": "node server/server.js",
+    "dev:worker": "cd worker && npx wrangler dev",
+    "deploy:worker": "cd worker && npx wrangler deploy"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -13,5 +15,8 @@
   "dependencies": {
     "express": "^4.19.2",
     "socket.io": "^4.7.5"
+  },
+  "devDependencies": {
+    "wrangler": "^3.57.0"
   }
 }

@@ -430,22 +430,92 @@
     </div>
   </div>
 
-  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
   <script>
     // ─── SERVER CONFIG ────────────────────────────────────────────────────────────
-    // Add your Fly.io server URL(s) here after deploying.
-    // Multiple URLs = random load-balanced connection.
-    const SERVERS = [
-      'https://your-app-name.fly.dev',  // ← replace with your Fly.io URL
-      // 'https://your-second-server.fly.dev', // add more servers here as you scale
-    ];
+    // After deploying to Cloudflare Workers, paste your worker URL here.
+    const MATCHMAKER_URL = 'https://your-worker.your-subdomain.workers.dev'; // ← CHANGE THIS
 
-    const SERVER_URL = SERVERS[Math.floor(Math.random() * SERVERS.length)];
-    const socket = io(SERVER_URL, {
-      transports: ['websocket', 'polling'],
-      reconnectionAttempts: 5,
-      reconnectionDelay: 1000,
-    });
+    // Kerala-inspired room names. Each room is a separate Durable Object.
+    const ROOMS = ['backwaters', 'munnar', 'varkala', 'kovalam', 'thekkady'];
+
+    let ws = null;
+
+    function connectToRoom() {
+      // Pick a random Kerala room
+      const room = ROOMS[Math.floor(Math.random() * ROOMS.length)];
+      const wsUrl = MATCHMAKER_URL.replace(/^http/, 'ws') + '/room?room=' + room;
+      console.log('Connecting to room:', room, wsUrl);
+
+      ws = new WebSocket(wsUrl);
+
+      ws.addEventListener('open', () => {
+        console.log('WebSocket connected, room:', room);
+      });
+
+      ws.addEventListener('message', (event) => {
+        let msg;
+        try { msg = JSON.parse(event.data); } catch { return; }
+        handleServerMessage(msg);
+      });
+
+      ws.addEventListener('error', (err) => {
+        console.error('WebSocket error:', err);
+      });
+
+      ws.addEventListener('close', () => {
+        console.log('WebSocket closed');
+        if (gameRunning) {
+          // attempt reconnect after brief delay
+          setTimeout(connectToRoom, 2000);
+        }
+      });
+    }
+
+    function wsSend(type, payload) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type, ...payload }));
+      }
+    }
+
+    function handleServerMessage(msg) {
+      switch (msg.type) {
+        case 'init':
+          localPlayerId = msg.id;
+          WORLD = msg.WORLD || WORLD;
+          serverTickMs = msg.tickMs || serverTickMs;
+          break;
+        case 'joinDenied':
+          alert(msg.message || 'Arena is full right now.');
+          document.getElementById('menu').style.display = 'flex';
+          document.getElementById('death-screen').style.display = 'none';
+          gameRunning = false;
+          break;
+        case 'gameState':
+          WORLD = msg.world || WORLD;
+          serverTickMs = msg.tickMs || serverTickMs;
+          orbs = msg.orbs || [];
+          scoreboard = msg.leaderboard || [];
+          selfState = msg.self || {};
+          reconcileSnakes(msg.players || [], msg.bots || []);
+          break;
+        case 'particleSpawn':
+          // room.js sends a batched { events: [{x,y,color,n}, ...] }
+          if (Array.isArray(msg.events)) {
+            for (const e of msg.events) spawnParticles(e.x, e.y, e.color, e.n);
+          } else {
+            spawnParticles(msg.x, msg.y, msg.color, msg.n); // legacy fallback
+          }
+          break;
+        case 'died':
+          gameRunning = false;
+          document.getElementById('death-screen').style.display = 'flex';
+          document.getElementById('death-score').textContent = `Final score: ${msg.score}`;
+          break;
+      }
+    }
+
+    // Connect immediately so WebSocket is ready before the player hits Play
+    connectToRoom();
 
     const canvas = document.getElementById('game');
     const ctx = canvas.getContext('2d');
@@ -659,41 +729,7 @@
       }
     }
 
-    socket.on('connect', () => {
-      console.log('Connected to server:', socket.id);
-    });
 
-    socket.on('init', (data) => {
-      localPlayerId = data.id;
-      WORLD = data.WORLD;
-      serverTickMs = data.tickMs || serverTickMs;
-    });
-
-    socket.on('joinDenied', (data) => {
-      alert(data.message || 'Arena is full right now.');
-      document.getElementById('menu').style.display = 'flex';
-      document.getElementById('death-screen').style.display = 'none';
-      gameRunning = false;
-    });
-
-    socket.on('gameState', (data) => {
-      WORLD = data.world || WORLD;
-      serverTickMs = data.tickMs || serverTickMs;
-      orbs = data.orbs || [];
-      scoreboard = data.leaderboard || [];
-      selfState = data.self || {};
-      reconcileSnakes(data.players || [], data.bots || []);
-    });
-
-    socket.on('particleSpawn', (data) => {
-      spawnParticles(data.x, data.y, data.color, data.n);
-    });
-
-    socket.on('died', (score) => {
-      gameRunning = false;
-      document.getElementById('death-screen').style.display = 'flex';
-      document.getElementById('death-score').textContent = `Final score: ${score}`;
-    });
 
     function spawnParticles(x, y, color, count) {
       const reducedCount = Math.max(1, Math.ceil(count * 0.5));
@@ -1052,7 +1088,7 @@
       const dx = pointer.x - canvas.width / 2;
       const dy = pointer.y - canvas.height / 2;
       const angle = Math.atan2(dy, dx || 0.0001);
-      socket.emit('input', { angle, boosting: pointer.boosting });
+      wsSend('input', { angle, boosting: pointer.boosting });
       lastInputSentAt = now;
     }
 
@@ -1093,7 +1129,21 @@
       pointer.boosting = false;
       pointer.active = false;
       pointer.touchId = null;
-      socket.emit('join', { name, skinIdx: selectedSkin });
+      // If ws is closed/not ready yet, reconnect then join
+      if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+        connectToRoom();
+        // Wait for ws to open, then join
+        const tryJoin = () => {
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            wsSend('join', { name, skinIdx: selectedSkin });
+          } else {
+            setTimeout(tryJoin, 100);
+          }
+        };
+        setTimeout(tryJoin, 200);
+      } else {
+        wsSend('join', { name, skinIdx: selectedSkin });
+      }
 
       if (!gameRunning) {
         gameRunning = true;
