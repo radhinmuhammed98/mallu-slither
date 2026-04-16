@@ -471,25 +471,9 @@ function connectToRoom() {
   };
 }
 
-      ws.addEventListener('message', (event) => {
-        let msg;
-        try { msg = JSON.parse(event.data); } catch { return; }
-        handleServerMessage(msg);
-      });
+      
 
-      ws.addEventListener('error', (err) => {
-        console.error('WebSocket error:', err);
-      });
-
-      ws.addEventListener('close', () => {
-        console.log('WebSocket closed');
-        if (gameRunning) {
-          // attempt reconnect after brief delay
-          setTimeout(connectToRoom, 2000);
-        }
-      });
-    }
-
+      
     function wsSend(type, payload) {
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type, ...payload }));
