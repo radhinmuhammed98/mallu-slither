@@ -299,34 +299,7 @@ this._ensureLoop();
 return new Response(null, { status: 101, webSocket: client });
   // ── Hibernation API handlers ─────────────────────────────────────────────
 
-  async webSocketMessage(ws, rawMsg) {
-    let msg;
-    try { msg = JSON.parse(rawMsg); } catch { return; }
-
-    const session = this.sessions.get(ws);
-    if (!session) return;
-
-    if (msg.type === 'join') {
-      this._handleJoin(ws, session, msg);
-    } else if (msg.type === 'input') {
-      this._handleInput(session, msg);
-    }
-  }
-
-  async webSocketClose(ws) {
-    const session = this.sessions.get(ws);
-    if (session && session.joined) {
-      const snake = this.players.get(session.id);
-      if (snake && snake.alive) this._killSnake(snake);
-      this.players.delete(session.id);
-      this._fillBots();
-    }
-    this.sessions.delete(ws);
-  }
-
-  async webSocketError(ws) {
-    await this.webSocketClose(ws);
-  }
+  
 
   // ── join / input handlers ────────────────────────────────────────────────
 
