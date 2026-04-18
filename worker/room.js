@@ -263,10 +263,36 @@ export class GameRoom {
 
 const { 0: client, 1: server } = new WebSocketPair();
 
-this.state.acceptWebSocket(server); // ✅ ONLY THIS
+server.accept();
 
 const sessionId = rnd36();
 this.sessions.set(server, { id: sessionId, joined: false });
+
+// ✅ ADD THIS BLOCK (CRITICAL)
+server.addEventListener("message", (event) => {
+  let msg;
+  try { msg = JSON.parse(event.data); } catch { return; }
+
+  const session = this.sessions.get(server);
+  if (!session) return;
+
+  if (msg.type === 'join') {
+    this._handleJoin(server, session, msg);
+  } else if (msg.type === 'input') {
+    this._handleInput(session, msg);
+  }
+});
+
+server.addEventListener("close", () => {
+  const session = this.sessions.get(server);
+  if (session && session.joined) {
+    const snake = this.players.get(session.id);
+    if (snake && snake.alive) this._killSnake(snake);
+    this.players.delete(session.id);
+    this._fillBots();
+  }
+  this.sessions.delete(server);
+});
 
 this._ensureLoop();
 
