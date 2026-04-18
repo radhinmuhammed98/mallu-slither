@@ -298,7 +298,7 @@ this._ensureLoop();
 
 return new Response(null, { status: 101, webSocket: client });
   // ── Hibernation API handlers ─────────────────────────────────────────────
-
+  }
   
 
   // ── join / input handlers ────────────────────────────────────────────────
