@@ -261,18 +261,16 @@ export class GameRoom {
       return new Response('Expected WebSocket upgrade', { status: 426 });
     }
 
-    const { 0: client, 1: server } = new WebSocketPair();
+const { 0: client, 1: server } = new WebSocketPair();
 
-    server.accept(); // ✅ ONLY THIS
+this.state.acceptWebSocket(server); // ✅ ONLY THIS
 
-    const sessionId = Math.random().toString(36).slice(2);
-    this.sessions.set(server, { id: sessionId, joined: false });
+const sessionId = rnd36();
+this.sessions.set(server, { id: sessionId, joined: false });
 
-    this._ensureLoop();
+this._ensureLoop();
 
-    return new Response(null, { status: 101, webSocket: client });
-  }
-
+return new Response(null, { status: 101, webSocket: client });
   // ── Hibernation API handlers ─────────────────────────────────────────────
 
   async webSocketMessage(ws, rawMsg) {
