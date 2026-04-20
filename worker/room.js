@@ -261,48 +261,45 @@ export class GameRoom {
       return new Response('Expected WebSocket upgrade', { status: 426 });
     }
 
-    const { 0: client, 1: server } = new WebSocketPair();
-    this.state.acceptWebSocket(server);
-    server.accept();
+const { 0: client, 1: server } = new WebSocketPair();
 
-    const sessionId = rnd36();
-    this.sessions.set(server, { id: sessionId, joined: false });
+server.accept();
 
-    this._ensureLoop();
+const sessionId = rnd36();
+this.sessions.set(server, { id: sessionId, joined: false });
 
-    return new Response(null, { status: 101, webSocket: client });
+// ✅ ADD THIS BLOCK (CRITICAL)
+server.addEventListener("message", (event) => {
+  let msg;
+  try { msg = JSON.parse(event.data); } catch { return; }
+
+  const session = this.sessions.get(server);
+  if (!session) return;
+
+  if (msg.type === 'join') {
+    this._handleJoin(server, session, msg);
+  } else if (msg.type === 'input') {
+    this._handleInput(session, msg);
   }
+});
 
+server.addEventListener("close", () => {
+  const session = this.sessions.get(server);
+  if (session && session.joined) {
+    const snake = this.players.get(session.id);
+    if (snake && snake.alive) this._killSnake(snake);
+    this.players.delete(session.id);
+    this._fillBots();
+  }
+  this.sessions.delete(server);
+});
+
+this._ensureLoop();
+
+return new Response(null, { status: 101, webSocket: client });
   // ── Hibernation API handlers ─────────────────────────────────────────────
 
-  async webSocketMessage(ws, rawMsg) {
-    let msg;
-    try { msg = JSON.parse(rawMsg); } catch { return; }
-
-    const session = this.sessions.get(ws);
-    if (!session) return;
-
-    if (msg.type === 'join') {
-      this._handleJoin(ws, session, msg);
-    } else if (msg.type === 'input') {
-      this._handleInput(session, msg);
-    }
-  }
-
-  async webSocketClose(ws) {
-    const session = this.sessions.get(ws);
-    if (session && session.joined) {
-      const snake = this.players.get(session.id);
-      if (snake && snake.alive) this._killSnake(snake);
-      this.players.delete(session.id);
-      this._fillBots();
-    }
-    this.sessions.delete(ws);
-  }
-
-  async webSocketError(ws) {
-    await this.webSocketClose(ws);
-  }
+  
 
   // ── join / input handlers ────────────────────────────────────────────────
 

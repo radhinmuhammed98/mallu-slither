@@ -433,44 +433,47 @@
   <script>
     // ─── SERVER CONFIG ────────────────────────────────────────────────────────────
     // After deploying to Cloudflare Workers, paste your worker URL here.
-    const MATCHMAKER_URL = 'https://your-worker.your-subdomain.workers.dev'; // ← CHANGE THIS
+    const MATCHMAKER_URL = 'https://slither-kerala.razikv-co-in.workers.dev'; // ← CHANGE THIS
 
     // Kerala-inspired room names. Each room is a separate Durable Object.
     const ROOMS = ['backwaters', 'munnar', 'varkala', 'kovalam', 'thekkady'];
 
     let ws = null;
 
-    function connectToRoom() {
-      // Pick a random Kerala room
-      const room = ROOMS[Math.floor(Math.random() * ROOMS.length)];
-      const wsUrl = MATCHMAKER_URL.replace(/^http/, 'ws') + '/room?room=' + room;
-      console.log('Connecting to room:', room, wsUrl);
+function connectToRoom() {
+  const room = ROOMS[Math.floor(Math.random() * ROOMS.length)];
 
-      ws = new WebSocket(wsUrl);
+  const wsUrl = `wss://slither-kerala.razikv-co-in.workers.dev/room?room=${room}`;
 
-      ws.addEventListener('open', () => {
-        console.log('WebSocket connected, room:', room);
-      });
+  console.log('Connecting to room:', room, wsUrl);
 
-      ws.addEventListener('message', (event) => {
-        let msg;
-        try { msg = JSON.parse(event.data); } catch { return; }
-        handleServerMessage(msg);
-      });
+  ws = new WebSocket(wsUrl);
 
-      ws.addEventListener('error', (err) => {
-        console.error('WebSocket error:', err);
-      });
+  ws.onopen = () => {
+    console.log('Connected');
+  };
 
-      ws.addEventListener('close', () => {
-        console.log('WebSocket closed');
-        if (gameRunning) {
-          // attempt reconnect after brief delay
-          setTimeout(connectToRoom, 2000);
-        }
-      });
+  ws.onerror = (err) => {
+    console.error('WebSocket error:', err);
+  };
+
+  ws.onclose = () => {
+    console.log('WebSocket closed');
+    if (gameRunning) {
+      setTimeout(connectToRoom, 2000);
     }
+  };
 
+  ws.onmessage = (event) => {
+    let msg;
+    try { msg = JSON.parse(event.data); } catch { return; }
+    handleServerMessage(msg);
+  };
+}
+
+      
+
+      
     function wsSend(type, payload) {
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type, ...payload }));
@@ -1172,34 +1175,34 @@
     });
 
     document.addEventListener('touchstart', (event) => {
-      const touch = event.changedTouches[0];
-      if (!touch) return;
-      pointer.touchId = touch.identifier;
-      pointer.touchStartAt = performance.now();
-      pointer.active = true;
-      pointer.boosting = false;
-      setPointerFromClient(touch.clientX, touch.clientY);
-      event.preventDefault();
-    }, { passive: false });
+  const touch = event.touches[0];
+  if (!touch) return;
+
+  pointer.touchId = touch.identifier;
+  pointer.touchStartAt = performance.now();
+
+  pointer.x = touch.clientX;
+  pointer.y = touch.clientY;
+
+  pointer.boosting = false;
+  pointer.active = true;
+}, { passive: false });
 
     document.addEventListener('touchmove', (event) => {
-      const touches = Array.from(event.touches);
-      const touch = touches.find((item) => item.identifier === pointer.touchId) || event.touches[0];
-      if (!touch) return;
-      setPointerFromClient(touch.clientX, touch.clientY);
-      pointer.boosting = performance.now() - pointer.touchStartAt > 140;
-      event.preventDefault();
-    }, { passive: false });
+  const touch = Array.from(event.touches).find(t => t.identifier === pointer.touchId) || event.touches[0];
+  if (!touch) return;
 
-    document.addEventListener('touchend', (event) => {
-      const changedTouches = Array.from(event.changedTouches);
-      const ended = changedTouches.find((item) => item.identifier === pointer.touchId);
-      if (!ended) return;
-      pointer.active = false;
-      pointer.boosting = false;
-      pointer.touchId = null;
-      event.preventDefault();
-    }, { passive: false });
+  pointer.x = touch.clientX;
+  pointer.y = touch.clientY;
+
+  pointer.boosting = (performance.now() - pointer.touchStartAt) > 150;
+}, { passive: false });
+
+document.addEventListener('touchend', () => {
+  pointer.active = false;
+  pointer.boosting = false;
+  pointer.touchId = null;
+}, { passive: false });
 
     document.addEventListener('touchcancel', () => {
       pointer.active = false;
