@@ -201,6 +201,22 @@
       color: var(--text-muted);
     }
 
+    #touch-pill {
+      position: fixed;
+      left: 14px;
+      bottom: 14px;
+      display: none;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: rgba(7, 21, 14, 0.68);
+      border: 1px solid rgba(240, 203, 114, 0.18);
+      color: rgba(248, 244, 232, 0.78);
+      font-size: 11px;
+      letter-spacing: 0.8px;
+      pointer-events: none;
+      backdrop-filter: blur(8px);
+    }
+
     #menu,
     #death-screen {
       position: fixed;
@@ -341,46 +357,69 @@
     }
 
     @media (max-width: 820px) {
+      #ui {
+        padding-top: env(safe-area-inset-top);
+        padding-bottom: env(safe-area-inset-bottom);
+      }
+
       #leaderboard {
-        top: auto;
-        right: 14px;
-        bottom: 166px;
-        width: 172px;
-        padding: 12px 14px;
+        display: none;
       }
 
       #score-box,
       #rank-box {
         top: 12px;
-        min-width: 94px;
-        padding: 10px 12px;
+        min-width: 72px;
+        padding: 8px 10px;
+        border-radius: 14px;
+      }
+
+      .label {
+        font-size: 9px;
+        margin-bottom: 2px;
       }
 
       .val {
-        font-size: 24px;
+        font-size: 18px;
       }
 
       #boost-panel {
         bottom: 14px;
-        gap: 8px;
-        padding: 8px 10px;
+        gap: 6px;
+        padding: 6px 10px;
+        border-radius: 16px;
+      }
+
+      #boost-panel span {
+        font-size: 10px;
       }
 
       #boost-bar-bg {
-        width: 112px;
+        width: 86px;
+        height: 6px;
       }
 
       #minimap {
-        width: 110px;
-        height: 110px;
+        width: 84px;
+        height: 84px;
         right: 14px;
         bottom: 14px;
+        opacity: 0.8;
+        box-shadow: none;
       }
 
       #mobile-hint {
         display: block;
         left: 14px;
-        bottom: 84px;
+        bottom: 56px;
+        max-width: 150px;
+        padding: 8px 10px;
+        font-size: 11px;
+        border-radius: 14px;
+      }
+
+      #touch-pill {
+        display: block;
       }
     }
   </style>
@@ -408,6 +447,7 @@
       </div>
     </div>
     <div id="mobile-hint">Drag anywhere to steer. Hold your finger to boost.</div>
+    <div id="touch-pill">DRAG TO TURN</div>
     <div id="minimap"><canvas id="mm-canvas" width="132" height="132"></canvas></div>
   </div>
 
@@ -524,9 +564,9 @@ function connectToRoom() {
     connectToRoom();
 
     const canvas = document.getElementById('game');
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
     const mmCanvas = document.getElementById('mm-canvas');
-    const mmCtx = mmCanvas.getContext('2d');
+    const mmCtx = mmCanvas.getContext('2d', { desynchronized: true });
 
     const SKINS = [
       { name: 'Coconut', body: '#5fbf6a', glow: '#8bd39a', head: '#2f6f46', eye: '#fef9e8' },
@@ -541,11 +581,11 @@ function connectToRoom() {
 
     const IS_TOUCH = matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
     const MAX_TRAIL_POINTS = 140;
-    const MAX_VISIBLE_ORBS = 100;
     const SNAKE_CULL_MARGIN = 260;
     const ORB_CULL_MARGIN = 40;
     const INPUT_SEND_MS = 50;
     const INTERPOLATION_BACK_TIME = 100;
+    const TOUCH_RADIUS = 72;
 
     let WORLD = 4000;
     let serverTickMs = 72;
@@ -555,6 +595,10 @@ function connectToRoom() {
     let lastFrameTime = performance.now();
     let lastInputSentAt = 0;
     let lastHudRefreshAt = 0;
+    let lastMinimapDrawAt = 0;
+    let lastFpsSampleAt = performance.now();
+    let fpsFrames = 0;
+    let averageFps = 60;
     let scoreboard = [];
     let selfState = {};
 
@@ -562,6 +606,16 @@ function connectToRoom() {
     let orbs = [];
     let particles = [];
 
+    const quality = {
+      renderScale: IS_TOUCH ? 0.82 : 1,
+      orbBudget: IS_TOUCH ? 50 : 100,
+      trailStep: IS_TOUCH ? 2 : 1,
+      trailCap: IS_TOUCH ? 90 : MAX_TRAIL_POINTS,
+      minimapIntervalMs: IS_TOUCH ? 180 : 90,
+      showRemoteNames: !IS_TOUCH,
+    };
+
+    let backgroundPattern = null;
     const camera = { x: 0, y: 0 };
     const pointer = {
       x: window.innerWidth / 2,
@@ -570,11 +624,42 @@ function connectToRoom() {
       boosting: false,
       touchId: null,
       touchStartAt: 0,
+      anchorX: window.innerWidth / 2,
+      anchorY: window.innerHeight / 2,
+      visualX: 0,
+      visualY: 0,
     };
 
+    function rebuildBackgroundPattern() {
+      const tile = document.createElement('canvas');
+      tile.width = 48;
+      tile.height = 48;
+      const tileCtx = tile.getContext('2d');
+      tileCtx.fillStyle = 'rgba(240, 203, 114, 0.065)';
+      tileCtx.fillRect(8, 8, 2, 2);
+      tileCtx.fillRect(28, 16, 2, 2);
+      tileCtx.fillRect(16, 32, 2, 2);
+      tileCtx.fillRect(38, 38, 2, 2);
+      backgroundPattern = ctx.createPattern(tile, 'repeat');
+    }
+
+    function viewportWidth() {
+      return window.innerWidth;
+    }
+
+    function viewportHeight() {
+      return window.innerHeight;
+    }
+
     function resizeCanvas() {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
+      const dprCap = IS_TOUCH ? 1 : 1.25;
+      const pixelRatio = Math.max(0.65, Math.min(window.devicePixelRatio || 1, dprCap) * quality.renderScale);
+      canvas.width = Math.round(window.innerWidth * pixelRatio);
+      canvas.height = Math.round(window.innerHeight * pixelRatio);
+      canvas.style.width = `${window.innerWidth}px`;
+      canvas.style.height = `${window.innerHeight}px`;
+      ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+      rebuildBackgroundPattern();
     }
 
     resizeCanvas();
@@ -759,8 +844,8 @@ function connectToRoom() {
       return {
         left: -margin,
         top: -margin,
-        right: canvas.width + margin,
-        bottom: canvas.height + margin,
+        right: viewportWidth() + margin,
+        bottom: viewportHeight() + margin,
       };
     }
 
@@ -799,7 +884,7 @@ function connectToRoom() {
         }
 
         const maxLength = Math.max(18, Math.ceil(rendered.length) + 12);
-        while (trail.length > Math.min(MAX_TRAIL_POINTS, maxLength)) {
+        while (trail.length > Math.min(quality.trailCap, maxLength)) {
           trail.shift();
         }
       }
@@ -809,14 +894,14 @@ function connectToRoom() {
       const dx = shortestWrappedDelta(camX, wrapCoord(worldX));
       const dy = shortestWrappedDelta(camY, wrapCoord(worldY));
       return {
-        x: canvas.width / 2 + dx,
-        y: canvas.height / 2 + dy,
+        x: viewportWidth() / 2 + dx,
+        y: viewportHeight() / 2 + dy,
       };
     }
 
     function drawBackground() {
-      const width = canvas.width;
-      const height = canvas.height;
+      const width = viewportWidth();
+      const height = viewportHeight();
 
       const gradient = ctx.createLinearGradient(0, 0, 0, height);
       gradient.addColorStop(0, '#163924');
@@ -825,18 +910,15 @@ function connectToRoom() {
       ctx.fillStyle = gradient;
       ctx.fillRect(0, 0, width, height);
 
-      const spacing = 48;
-      const offsetX = ((-camera.x) % spacing + spacing) % spacing;
-      const offsetY = ((-camera.y) % spacing + spacing) % spacing;
+      if (!backgroundPattern) return;
 
-      ctx.beginPath();
-      for (let x = offsetX; x < width + spacing; x += spacing) {
-        for (let y = offsetY; y < height + spacing; y += spacing) {
-          ctx.rect(x, y, 2, 2);
-        }
-      }
-      ctx.fillStyle = 'rgba(240, 203, 114, 0.07)';
-      ctx.fill();
+      ctx.save();
+      ctx.translate(((-camera.x) % 48 + 48) % 48, ((-camera.y) % 48 + 48) % 48);
+      ctx.fillStyle = backgroundPattern;
+      ctx.globalAlpha = IS_TOUCH ? 0.5 : 1;
+      ctx.fillRect(-48, -48, width + 96, height + 96);
+      ctx.globalAlpha = 1;
+      ctx.restore();
     }
 
     function getVisibleOrbs(renderTime, bounds) {
@@ -853,13 +935,13 @@ function connectToRoom() {
         });
       }
 
-      if (visibleOrbs.length > MAX_VISIBLE_ORBS) {
+      if (visibleOrbs.length > quality.orbBudget) {
         visibleOrbs.sort((a, b) => {
-          const da = (a.screenX - canvas.width / 2) ** 2 + (a.screenY - canvas.height / 2) ** 2;
-          const db = (b.screenX - canvas.width / 2) ** 2 + (b.screenY - canvas.height / 2) ** 2;
+          const da = (a.screenX - viewportWidth() / 2) ** 2 + (a.screenY - viewportHeight() / 2) ** 2;
+          const db = (b.screenX - viewportWidth() / 2) ** 2 + (b.screenY - viewportHeight() / 2) ** 2;
           return da - db;
         });
-        visibleOrbs.length = MAX_VISIBLE_ORBS;
+        visibleOrbs.length = quality.orbBudget;
       }
 
       return visibleOrbs;
@@ -878,11 +960,13 @@ function connectToRoom() {
         }
         ctx.fill();
 
-        ctx.shadowBlur = 0;
-        ctx.beginPath();
-        ctx.arc(screenX - radius * 0.24, screenY - radius * 0.24, radius * 0.28, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(255,255,255,0.55)';
-        ctx.fill();
+        if (!IS_TOUCH) {
+          ctx.shadowBlur = 0;
+          ctx.beginPath();
+          ctx.arc(screenX - radius * 0.24, screenY - radius * 0.24, radius * 0.28, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(255,255,255,0.55)';
+          ctx.fill();
+        }
       }
       ctx.shadowBlur = 0;
     }
@@ -931,9 +1015,9 @@ function connectToRoom() {
         const first = toScreen(trail[0].x, trail[0].y, camera.x, camera.y);
         ctx.moveTo(first.x, first.y);
 
-        for (let i = 1; i < trail.length; i++) {
+        for (let i = quality.trailStep; i < trail.length; i += quality.trailStep) {
           const current = toScreen(trail[i].x, trail[i].y, camera.x, camera.y);
-          const previous = toScreen(trail[i - 1].x, trail[i - 1].y, camera.x, camera.y);
+          const previous = toScreen(trail[Math.max(0, i - quality.trailStep)].x, trail[Math.max(0, i - quality.trailStep)].y, camera.x, camera.y);
           const midX = (current.x + previous.x) / 2;
           const midY = (current.y + previous.y) / 2;
           ctx.quadraticCurveTo(previous.x, previous.y, midX, midY);
@@ -990,15 +1074,20 @@ function connectToRoom() {
         ctx.fill();
       }
 
-      ctx.font = `bold ${Math.max(11, radius)}px Trebuchet MS`;
-      ctx.textAlign = 'center';
-      ctx.fillStyle = 'rgba(0,0,0,0.45)';
-      ctx.fillText(snake.name, head.x + 1, head.y - radius * 2.15 + 1);
-      ctx.fillStyle = '#fffaf0';
-      ctx.fillText(snake.name, head.x, head.y - radius * 2.15);
+      if (quality.showRemoteNames || snake.id === localPlayerId) {
+        ctx.font = `bold ${Math.max(11, radius)}px Trebuchet MS`;
+        ctx.textAlign = 'center';
+        ctx.fillStyle = 'rgba(0,0,0,0.45)';
+        ctx.fillText(snake.name, head.x + 1, head.y - radius * 2.15 + 1);
+        ctx.fillStyle = '#fffaf0';
+        ctx.fillText(snake.name, head.x, head.y - radius * 2.15);
+      }
     }
 
-    function drawMinimap() {
+    function drawMinimap(now) {
+      if (now - lastMinimapDrawAt < quality.minimapIntervalMs) return;
+      lastMinimapDrawAt = now;
+
       const size = mmCanvas.width;
       mmCtx.clearRect(0, 0, size, size);
       mmCtx.save();
@@ -1014,7 +1103,7 @@ function connectToRoom() {
 
       const scale = size / WORLD;
 
-      for (let i = 0; i < orbs.length; i += 5) {
+      for (let i = 0; i < orbs.length; i += (IS_TOUCH ? 9 : 5)) {
         const orb = orbs[i];
         if (!orb) continue;
         mmCtx.beginPath();
@@ -1044,7 +1133,7 @@ function connectToRoom() {
     }
 
     function updateLeaderboard(now) {
-      if (now - lastHudRefreshAt < 120) return;
+      if (now - lastHudRefreshAt < (IS_TOUCH ? 180 : 120)) return;
       lastHudRefreshAt = now;
 
       const list = document.getElementById('lb-list');
@@ -1075,6 +1164,29 @@ function connectToRoom() {
       ctx.fill();
     }
 
+    function updateQuality(now) {
+      fpsFrames += 1;
+      const sampleDuration = now - lastFpsSampleAt;
+      if (sampleDuration < 600) return;
+
+      averageFps = (fpsFrames * 1000) / sampleDuration;
+      fpsFrames = 0;
+      lastFpsSampleAt = now;
+
+      let nextScale = quality.renderScale;
+      if (averageFps < 42) nextScale = Math.max(IS_TOUCH ? 0.62 : 0.78, nextScale - 0.08);
+      else if (averageFps > 56) nextScale = Math.min(IS_TOUCH ? 0.88 : 1, nextScale + 0.04);
+
+      quality.orbBudget = averageFps < 42 ? (IS_TOUCH ? 32 : 70) : (IS_TOUCH ? 50 : 100);
+      quality.trailStep = averageFps < 42 ? (IS_TOUCH ? 3 : 2) : (IS_TOUCH ? 2 : 1);
+      quality.trailCap = averageFps < 42 ? (IS_TOUCH ? 64 : 110) : (IS_TOUCH ? 90 : MAX_TRAIL_POINTS);
+
+      if (Math.abs(nextScale - quality.renderScale) >= 0.04) {
+        quality.renderScale = nextScale;
+        resizeCanvas();
+      }
+    }
+
     function getLocalSnake() {
       return localPlayerId ? snakes.get(localPlayerId) : null;
     }
@@ -1091,11 +1203,36 @@ function connectToRoom() {
       if (!me || !gameRunning) return;
       if (now - lastInputSentAt < INPUT_SEND_MS) return;
 
-      const dx = pointer.x - canvas.width / 2;
-      const dy = pointer.y - canvas.height / 2;
+      const dx = pointer.x - viewportWidth() / 2;
+      const dy = pointer.y - viewportHeight() / 2;
       const angle = Math.atan2(dy, dx || 0.0001);
       wsSend('input', { angle, boosting: pointer.boosting });
       lastInputSentAt = now;
+    }
+
+    function drawTouchGuide() {
+      if (!IS_TOUCH || !pointer.active) return;
+
+      const baseX = pointer.anchorX;
+      const baseY = pointer.anchorY;
+      const knobX = baseX + pointer.visualX;
+      const knobY = baseY + pointer.visualY;
+
+      ctx.save();
+      ctx.globalAlpha = 0.6;
+      ctx.beginPath();
+      ctx.arc(baseX, baseY, TOUCH_RADIUS, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(7, 21, 14, 0.28)';
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = 'rgba(240, 203, 114, 0.18)';
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(knobX, knobY, 24, 0, Math.PI * 2);
+      ctx.fillStyle = pointer.boosting ? 'rgba(216, 169, 58, 0.7)' : 'rgba(126, 217, 87, 0.65)';
+      ctx.fill();
+      ctx.restore();
     }
 
     function gameLoop(now) {
@@ -1107,6 +1244,7 @@ function connectToRoom() {
       const deltaScale = Math.min(2.2, deltaMs / 16.67);
       const renderTime = now - INTERPOLATION_BACK_TIME;
 
+      updateQuality(now);
       updateSnakeTrails(renderTime);
       updateCamera();
       sendInput(now);
@@ -1123,7 +1261,8 @@ function connectToRoom() {
       visibleSnakes.forEach(drawSnake);
 
       drawCursor();
-      drawMinimap();
+      drawTouchGuide();
+      drawMinimap(now);
       updateLeaderboard(now);
     }
 
@@ -1135,6 +1274,8 @@ function connectToRoom() {
       pointer.boosting = false;
       pointer.active = false;
       pointer.touchId = null;
+      pointer.visualX = 0;
+      pointer.visualY = 0;
       // If ws is closed/not ready yet, reconnect then join
       if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
         connectToRoom();
@@ -1178,39 +1319,62 @@ function connectToRoom() {
     });
 
     document.addEventListener('touchstart', (event) => {
-  const touch = event.touches[0];
-  if (!touch) return;
+      const touch = event.touches[0];
+      if (!touch) return;
 
-  pointer.touchId = touch.identifier;
-  pointer.touchStartAt = performance.now();
-
-  pointer.x = touch.clientX;
-  pointer.y = touch.clientY;
-
-  pointer.boosting = false;
-  pointer.active = true;
-}, { passive: false });
+      pointer.touchId = touch.identifier;
+      pointer.touchStartAt = performance.now();
+      pointer.anchorX = touch.clientX;
+      pointer.anchorY = touch.clientY;
+      pointer.x = viewportWidth() / 2;
+      pointer.y = viewportHeight() / 2;
+      pointer.visualX = 0;
+      pointer.visualY = 0;
+      pointer.boosting = event.touches.length > 1;
+      pointer.active = true;
+      event.preventDefault();
+    }, { passive: false });
 
     document.addEventListener('touchmove', (event) => {
-  const touch = Array.from(event.touches).find(t => t.identifier === pointer.touchId) || event.touches[0];
-  if (!touch) return;
+      const touch = Array.from(event.touches).find((item) => item.identifier === pointer.touchId) || event.touches[0];
+      if (!touch) return;
 
-  pointer.x = touch.clientX;
-  pointer.y = touch.clientY;
+      let dx = touch.clientX - pointer.anchorX;
+      let dy = touch.clientY - pointer.anchorY;
+      const distance = Math.hypot(dx, dy);
+      const clampScale = distance > TOUCH_RADIUS ? TOUCH_RADIUS / distance : 1;
+      dx *= clampScale;
+      dy *= clampScale;
 
-  pointer.boosting = (performance.now() - pointer.touchStartAt) > 150;
-}, { passive: false });
+      pointer.visualX = dx;
+      pointer.visualY = dy;
+      pointer.x = viewportWidth() / 2 + dx * 2.4;
+      pointer.y = viewportHeight() / 2 + dy * 2.4;
+      pointer.boosting = event.touches.length > 1 || (performance.now() - pointer.touchStartAt > 180 && distance < 18);
+      event.preventDefault();
+    }, { passive: false });
 
-document.addEventListener('touchend', () => {
-  pointer.active = false;
-  pointer.boosting = false;
-  pointer.touchId = null;
-}, { passive: false });
+    document.addEventListener('touchend', (event) => {
+      const stillActive = Array.from(event.touches).find((item) => item.identifier === pointer.touchId);
+      if (stillActive) return;
+      pointer.active = false;
+      pointer.boosting = false;
+      pointer.touchId = null;
+      pointer.visualX = 0;
+      pointer.visualY = 0;
+      pointer.x = viewportWidth() / 2;
+      pointer.y = viewportHeight() / 2;
+      event.preventDefault();
+    }, { passive: false });
 
     document.addEventListener('touchcancel', () => {
       pointer.active = false;
       pointer.boosting = false;
       pointer.touchId = null;
+      pointer.visualX = 0;
+      pointer.visualY = 0;
+      pointer.x = viewportWidth() / 2;
+      pointer.y = viewportHeight() / 2;
     }, { passive: false });
 
     document.addEventListener('keydown', (event) => {
