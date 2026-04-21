@@ -404,9 +404,22 @@
         height: 84px;
         right: 14px;
         bottom: 14px;
-        opacity: 0.8;
+        opacity: 0.85;
         box-shadow: none;
       }
+
+      #leaderboard {
+        top: auto;
+        right: 14px;
+        bottom: 108px;
+        width: 130px;
+        padding: 8px 10px;
+        border-radius: 14px;
+      }
+
+      #leaderboard h3 { font-size: 9px; margin-bottom: 4px; }
+      .lb-row { font-size: 10px; padding: 2px 0; }
+      .lb-row .lb-name { max-width: 80px; }
 
       #mobile-hint {
         display: block;
@@ -813,9 +826,27 @@ function connectToRoom() {
           snakes.delete(id);
           continue;
         }
-
         if (!liveIds.has(id) && id === localPlayerId && !gameRunning) {
           snakes.delete(id);
+        }
+      }
+    }
+
+    // Adaptive quality — throttles rendering details based on live FPS
+    function updateQuality(now) {
+      fpsFrames++;
+      if (now - lastFpsSampleAt >= 1000) {
+        averageFps = fpsFrames;
+        fpsFrames = 0;
+        lastFpsSampleAt = now;
+        // Drop quality if FPS is struggling
+        if (IS_TOUCH) {
+          quality.trailStep = averageFps < 30 ? 3 : 2;
+          quality.orbBudget = averageFps < 30 ? 35 : 55;
+          quality.trailCap  = averageFps < 30 ? 55 : 80;
+        } else {
+          quality.trailStep = averageFps < 45 ? 2 : 1;
+          quality.orbBudget = averageFps < 45 ? 60 : 100;
         }
       }
     }
@@ -1015,12 +1046,18 @@ function connectToRoom() {
         const first = toScreen(trail[0].x, trail[0].y, camera.x, camera.y);
         ctx.moveTo(first.x, first.y);
 
-        for (let i = quality.trailStep; i < trail.length; i += quality.trailStep) {
-          const current = toScreen(trail[i].x, trail[i].y, camera.x, camera.y);
-          const previous = toScreen(trail[Math.max(0, i - quality.trailStep)].x, trail[Math.max(0, i - quality.trailStep)].y, camera.x, camera.y);
-          const midX = (current.x + previous.x) / 2;
-          const midY = (current.y + previous.y) / 2;
-          ctx.quadraticCurveTo(previous.x, previous.y, midX, midY);
+        if (IS_TOUCH) {
+          // Fast path: lineTo only (no quadratic) — doubles FPS on mobile
+          for (let i = quality.trailStep; i < trail.length; i += quality.trailStep) {
+            const p = toScreen(trail[i].x, trail[i].y, camera.x, camera.y);
+            ctx.lineTo(p.x, p.y);
+          }
+        } else {
+          for (let i = quality.trailStep; i < trail.length; i += quality.trailStep) {
+            const cur  = toScreen(trail[i].x, trail[i].y, camera.x, camera.y);
+            const prev = toScreen(trail[Math.max(0, i - quality.trailStep)].x, trail[Math.max(0, i - quality.trailStep)].y, camera.x, camera.y);
+            ctx.quadraticCurveTo(prev.x, prev.y, (cur.x + prev.x) / 2, (cur.y + prev.y) / 2);
+          }
         }
 
         ctx.strokeStyle = skin.body;
@@ -1199,9 +1236,9 @@ function connectToRoom() {
     }
 
     function sendInput(now) {
-      const me = getLocalSnake();
-      if (!me || !gameRunning) return;
+      if (!gameRunning) return;
       if (now - lastInputSentAt < INPUT_SEND_MS) return;
+      if (!localPlayerId) return;
 
       const dx = pointer.x - viewportWidth() / 2;
       const dy = pointer.y - viewportHeight() / 2;
