@@ -1,12 +1,13 @@
+"$schema" = "../node_modules/wrangler/config-schema.json"
 name = "slither-kerala"
 main = "index.js"
-compatibility_date = "2024-09-23"
+compatibility_date = "2026-04-20"
 compatibility_flags = ["nodejs_compat"]
+workers_dev = true
 
-[durable_objects]
-bindings = [
-  { name = "GAME_ROOM", class_name = "GameRoom" }
-]
+[[durable_objects.bindings]]
+name = "GAME_ROOM"
+class_name = "GameRoom"
 
 [[migrations]]
 tag = "v1"

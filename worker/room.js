@@ -1,11 +1,12 @@
-// worker/room.js — Cloudflare Durable Object: one instance per room
-// Contains ALL game logic: Snake class, bots, collisions, orbs, game loop.
-// Ported from server/server.js — logic unchanged, I/O adapted for native WebSockets.
+import { DurableObject } from 'cloudflare:workers';
+
+// Cloudflare Durable Object: one instance per room.
+// Keeps the existing game architecture but runs it behind native WebSockets.
 
 const CONFIG = {
   worldSize: 4000,
-  tickMs: 72,             // ~14 ticks/sec
-  maxPlayers: 15,
+  tickMs: 72,
+  maxPlayers: 25,
   maxEntities: 25,
   initialOrbCount: 300,
   minOrbCount: 200,
@@ -31,21 +32,19 @@ const SKINS = [
 ];
 
 const ORB_COLORS = ['#5fbf6a', '#d8a93a', '#7ed957', '#95c94d', '#c96d34', '#73d0ab'];
-
 const BOT_NAMES = [
   'Achayan', 'Muttayi', 'Coconut Joe', 'Nair', 'Amma', 'Karimeen', 'Thekkan',
   'Vadakkan', 'Rajan', 'Molly', 'Rajesh', 'Padmini', 'Appan', 'Chechi',
 ];
 
-// ─── UTILITIES ──────────────────────────────────────────────────────────────
-
 function dist2(ax, ay, bx, by) {
-  const dx = ax - bx, dy = ay - by;
+  const dx = ax - bx;
+  const dy = ay - by;
   return dx * dx + dy * dy;
 }
 
-function wrapCoord(v) {
-  return ((v % WORLD) + WORLD) % WORLD;
+function wrapCoord(value) {
+  return ((value % WORLD) + WORLD) % WORLD;
 }
 
 function spawnPosition() {
@@ -59,7 +58,18 @@ function rnd36() {
   return Math.random().toString(36).slice(2, 9);
 }
 
-// ─── SNAKE CLASS ─────────────────────────────────────────────────────────────
+function spawnOrbs(orbsRef, count) {
+  for (let i = 0; i < count; i++) {
+    orbsRef.push({
+      id: rnd36(),
+      x: Math.random() * WORLD,
+      y: Math.random() * WORLD,
+      r: 5 + Math.random() * 6,
+      color: ORB_COLORS[(Math.random() * ORB_COLORS.length) | 0],
+      pulse: Math.random() * Math.PI * 2,
+    });
+  }
+}
 
 class Snake {
   constructor(id, x, y, skinIdx, name, isPlayer = false) {
@@ -92,10 +102,13 @@ class Snake {
     }
   }
 
-  get head() { return this.segments[0]; }
+  get head() {
+    return this.segments[0];
+  }
 
   moveToward(tx, ty) {
-    const dx = tx - this.head.x, dy = ty - this.head.y;
+    const dx = tx - this.head.x;
+    const dy = ty - this.head.y;
     const target = Math.atan2(dy, dx);
     let diff = target - this.angle;
     while (diff > Math.PI) diff -= Math.PI * 2;
@@ -104,7 +117,7 @@ class Snake {
   }
 
   update(orbsRef, activePlayers) {
-    if (!this.alive) return null; // returns particle event or null
+    if (!this.alive) return null;
 
     if (!this.isPlayer) {
       this.updateBotAI(orbsRef, activePlayers);
@@ -131,24 +144,25 @@ class Snake {
       this.boostE = Math.min(1, this.boostE + 0.002);
     }
 
-    const nx = this.head.x + Math.cos(this.angle) * speed;
-    const ny = this.head.y + Math.sin(this.angle) * speed;
-    const hx = wrapCoord(nx), hy = wrapCoord(ny);
+    const nextX = this.head.x + Math.cos(this.angle) * speed;
+    const nextY = this.head.y + Math.sin(this.angle) * speed;
+    const hx = wrapCoord(nextX);
+    const hy = wrapCoord(nextY);
+
     this.segments.unshift({ x: hx, y: hy });
     while (this.segments.length > this.length + 2) this.segments.pop();
 
-    // eat orbs
     let particleEvent = null;
     for (let i = orbsRef.length - 1; i >= 0; i--) {
-      const o = orbsRef[i];
-      const dx = hx - o.x, dy = hy - o.y;
-      if (dx * dx + dy * dy < (this.width + o.r) * (this.width + o.r)) {
-        this.score += Math.ceil(o.r);
-        this.length += Math.ceil(o.r / 8);
+      const orb = orbsRef[i];
+      const dx = hx - orb.x;
+      const dy = hy - orb.y;
+      if (dx * dx + dy * dy < (this.width + orb.r) * (this.width + orb.r)) {
+        this.score += Math.ceil(orb.r);
+        this.length += Math.ceil(orb.r / 8);
         this.width = Math.min(32, 18 + this.length / 60);
-        particleEvent = { x: o.x, y: o.y, color: o.color, n: 5 };
+        particleEvent = { x: orb.x, y: orb.y, color: orb.color, n: 5 };
         orbsRef.splice(i, 1);
-        // refill one orb
         orbsRef.push({
           id: rnd36(),
           x: Math.random() * WORLD,
@@ -157,15 +171,18 @@ class Snake {
           color: ORB_COLORS[(Math.random() * ORB_COLORS.length) | 0],
           pulse: Math.random() * Math.PI * 2,
         });
-        break; // one orb per tick
+        break;
       }
     }
+
     return particleEvent;
   }
 
   updateBotAI(orbsRef, activePlayers) {
     this.aiTimer -= 1;
-    const cx = this.head.x, cy = this.head.y, margin = 200;
+    const cx = this.head.x;
+    const cy = this.head.y;
+    const margin = 200;
 
     if (cx < margin || cx > WORLD - margin || cy < margin || cy > WORLD - margin) {
       this.moveToward(WORLD / 2, WORLD / 2);
@@ -177,20 +194,26 @@ class Snake {
       return;
     }
 
-    let best = null, bestDist = Infinity;
+    let best = null;
+    let bestDist = Infinity;
 
-    // occasionally chase a player
     if (activePlayers.length > 0 && Math.random() < 0.3) {
-      for (const p of activePlayers) {
-        const d = dist2(cx, cy, p.head.x, p.head.y);
-        if (d < 300 * 300 && d < bestDist) { bestDist = d; best = p.head; }
+      for (const player of activePlayers) {
+        const distance = dist2(cx, cy, player.head.x, player.head.y);
+        if (distance < 300 * 300 && distance < bestDist) {
+          bestDist = distance;
+          best = player.head;
+        }
       }
     }
-    // chase nearest orb
+
     if (!best) {
-      for (const o of orbsRef) {
-        const d = dist2(cx, cy, o.x, o.y);
-        if (d < bestDist) { bestDist = d; best = o; }
+      for (const orb of orbsRef) {
+        const distance = dist2(cx, cy, orb.x, orb.y);
+        if (distance < bestDist) {
+          bestDist = distance;
+          best = orb;
+        }
       }
     }
 
@@ -213,47 +236,23 @@ class Snake {
   }
 }
 
-// ─── ORB HELPERS ─────────────────────────────────────────────────────────────
-
-function spawnOrbs(orbsRef, count) {
-  for (let i = 0; i < count; i++) {
-    orbsRef.push({
-      id: rnd36(),
-      x: Math.random() * WORLD,
-      y: Math.random() * WORLD,
-      r: 5 + Math.random() * 6,
-      color: ORB_COLORS[(Math.random() * ORB_COLORS.length) | 0],
-      pulse: Math.random() * Math.PI * 2,
-    });
-  }
-}
-
-// ─── DURABLE OBJECT ──────────────────────────────────────────────────────────
-
-export class GameRoom {
+export class GameRoom extends DurableObject {
   constructor(state, env) {
+    super(state, env);
     this.state = state;
     this.env = env;
-
-    // Game state
-    this.players = new Map();   // socketId -> Snake
-    this.bots = [];             // Snake[]
+    this.players = new Map();
+    this.bots = [];
     this.orbs = [];
     this.nextBotId = 1;
     this.frame = 0;
     this.lastBotTrimAt = 0;
-
-    // WebSocket sessions: ws -> { id, joined }
     this.sessions = new Map();
-
     this.loopHandle = null;
 
-    // Seed world
     spawnOrbs(this.orbs, CONFIG.initialOrbCount);
     this._fillBots();
   }
-
-  // ── incoming fetch (WebSocket upgrade) ──────────────────────────────────
 
   async fetch(request) {
     const upgradeHeader = request.headers.get('Upgrade');
@@ -262,274 +261,319 @@ export class GameRoom {
     }
 
     const { 0: client, 1: server } = new WebSocketPair();
-
     server.accept();
 
-    const sessionId = rnd36();
-    this.sessions.set(server, { id: sessionId, joined: false });
+    const session = { id: rnd36(), joined: false };
+    this.sessions.set(server, session);
 
-    // ✅ ADD THIS BLOCK (CRITICAL)
-    server.addEventListener("message", (event) => {
-      let msg;
-      try { msg = JSON.parse(event.data); } catch { return; }
-
-      const session = this.sessions.get(server);
-      if (!session) return;
-
-      if (msg.type === 'join') {
-        this._handleJoin(server, session, msg);
-      } else if (msg.type === 'input') {
-        this._handleInput(session, msg);
-      }
+    server.addEventListener('message', (event) => {
+      this._handleMessage(server, event);
     });
 
-  async webSocketClose(ws) {
-      const session = this.sessions.get(ws);
-      if (session && session.joined) {
-        const snake = this.players.get(session.id);
-        if (snake && snake.alive) this._killSnake(snake);
-        this.players.delete(session.id);
-        this._fillBots();
-      }
-      this.sessions.delete(ws);
+    server.addEventListener('close', () => {
+      this._handleDisconnect(server);
+    });
+
+    server.addEventListener('error', () => {
+      this._handleDisconnect(server);
+    });
+
+    this._ensureLoop();
+
+    return new Response(null, {
+      status: 101,
+      webSocket: client,
+    });
+  }
+
+  _handleMessage(ws, event) {
+    let msg;
+    try {
+      msg = JSON.parse(event.data);
+    } catch {
+      return;
     }
 
-  async webSocketError(ws) {
-      await this.webSocketClose(ws);
+    const session = this.sessions.get(ws);
+    if (!session || !msg || typeof msg.type !== 'string') return;
+
+    if (msg.type === 'join') {
+      this._handleJoin(ws, session, msg);
+      return;
     }
 
-    // ── join / input handlers ────────────────────────────────────────────────
-
-    _handleJoin(ws, session, msg) {
-      // re-join: kill old snake if alive
-      if (session.joined) {
-        const old = this.players.get(session.id);
-        if (old && old.alive) this._killSnake(old);
-      }
-
-      if (this._activePlayers().length >= CONFIG.maxPlayers) {
-        this._send(ws, { type: 'joinDenied', message: 'Room is full. Try again shortly.' });
-        return;
-      }
-
-      const skinIdx = Number.isInteger(msg.skinIdx) ? msg.skinIdx : 0;
-      const name = String(msg.name || 'Player').trim().slice(0, 16) || 'Player';
-      const spawnX = CONFIG.playerSpawnMin + Math.random() * CONFIG.playerSpawnRange;
-      const spawnY = CONFIG.playerSpawnMin + Math.random() * CONFIG.playerSpawnRange;
-
-      const snake = new Snake(session.id, spawnX, spawnY, skinIdx, name, true);
-      this.players.set(session.id, snake);
-      session.joined = true;
-
-      this._trimBots();
-
-      this._send(ws, {
-        type: 'init',
-        id: session.id,
-        WORLD,
-        tickMs: CONFIG.tickMs,
-      });
+    if (msg.type === 'input') {
+      this._handleInput(session, msg);
     }
+  }
 
-    _handleInput(session, msg) {
+  _handleDisconnect(ws) {
+    const session = this.sessions.get(ws);
+    if (!session) return;
+
+    if (session.joined) {
       const snake = this.players.get(session.id);
-      if (!snake || !snake.alive) return;
-      if (typeof msg.angle === 'number' && isFinite(msg.angle)) {
-        snake.targetAngle = msg.angle;
-      }
-      snake.boosting = Boolean(msg.boosting);
-    }
-
-    // ── game loop ────────────────────────────────────────────────────────────
-
-    _ensureLoop() {
-      if (!this.loopHandle) {
-        this.loopHandle = setInterval(() => this._tick(), CONFIG.tickMs);
-      }
-    }
-
-    _tick() {
-      this.frame += 1;
-
-      const activePlayers = this._activePlayers();
-      const particleEvents = [];
-
-      // update players
-      for (const snake of this.players.values()) {
-        const evt = snake.update(this.orbs, activePlayers);
-        if (evt) particleEvents.push(evt);
-      }
-
-      // update bots
-      for (const bot of this.bots) {
-        const evt = bot.update(this.orbs, activePlayers);
-        if (evt) particleEvents.push(evt);
-      }
-
-      // prune dead bots
-      this.bots = this.bots.filter(b => b.alive);
-
-      // collisions every 2 frames
-      if (this.frame % 2 === 0) this._checkCollisions(particleEvents);
-
-      // top up orbs
-      if (this.orbs.length < CONFIG.minOrbCount) {
-        spawnOrbs(this.orbs, CONFIG.orbRefillBurst);
-      }
-
-      // fill bot slots
+      if (snake && snake.alive) this._killSnake(snake);
+      this.players.delete(session.id);
       this._fillBots();
+    }
 
-      // broadcast
-      const state = this._buildState();
-      const stateMsg = JSON.stringify({ type: 'gameState', ...state });
+    this.sessions.delete(ws);
+  }
 
+  _handleJoin(ws, session, msg) {
+    if (session.joined) {
+      const oldSnake = this.players.get(session.id);
+      if (oldSnake && oldSnake.alive) this._killSnake(oldSnake);
+    }
+
+    if (this._activePlayers().length >= CONFIG.maxPlayers) {
+      this._send(ws, { type: 'joinDenied', message: 'Room is full. Try again shortly.' });
+      return;
+    }
+
+    const skinIdx = Number.isInteger(msg.skinIdx) ? msg.skinIdx : 0;
+    const name = String(msg.name || 'Player').trim().slice(0, 16) || 'Player';
+    const spawnX = CONFIG.playerSpawnMin + Math.random() * CONFIG.playerSpawnRange;
+    const spawnY = CONFIG.playerSpawnMin + Math.random() * CONFIG.playerSpawnRange;
+
+    const snake = new Snake(session.id, spawnX, spawnY, skinIdx, name, true);
+    this.players.set(session.id, snake);
+    session.joined = true;
+
+    this._trimBots();
+    this._ensureLoop();
+
+    this._send(ws, {
+      type: 'init',
+      id: session.id,
+      WORLD,
+      tickMs: CONFIG.tickMs,
+    });
+  }
+
+  _handleInput(session, msg) {
+    const snake = this.players.get(session.id);
+    if (!snake || !snake.alive) return;
+
+    if (typeof msg.angle === 'number' && Number.isFinite(msg.angle)) {
+      snake.targetAngle = msg.angle;
+    }
+
+    snake.boosting = Boolean(msg.boosting);
+  }
+
+  _ensureLoop() {
+    if (!this.loopHandle) {
+      this.loopHandle = setInterval(() => this._tick(), CONFIG.tickMs);
+    }
+  }
+
+  _tick() {
+    this.frame += 1;
+
+    const activePlayers = this._activePlayers();
+    const particleEvents = [];
+
+    for (const snake of this.players.values()) {
+      const event = snake.update(this.orbs, activePlayers);
+      if (event) particleEvents.push(event);
+    }
+
+    for (const bot of this.bots) {
+      const event = bot.update(this.orbs, activePlayers);
+      if (event) particleEvents.push(event);
+    }
+
+    this.bots = this.bots.filter((bot) => bot.alive);
+
+    if (this.frame % 2 === 0) {
+      this._checkCollisions(particleEvents);
+    }
+
+    if (this.orbs.length < CONFIG.minOrbCount) {
+      spawnOrbs(this.orbs, CONFIG.orbRefillBurst);
+    }
+
+    this._fillBots();
+
+    const stateMsg = JSON.stringify({ type: 'gameState', ...this._buildState() });
+    for (const [ws, session] of this.sessions.entries()) {
+      if (!session.joined) continue;
+      this._safeSend(ws, stateMsg);
+    }
+
+    if (particleEvents.length > 0) {
+      const particleMsg = JSON.stringify({ type: 'particleSpawn', events: particleEvents });
       for (const [ws, session] of this.sessions.entries()) {
         if (!session.joined) continue;
-        ws.send(stateMsg);
-      }
-
-      // broadcast particles
-      if (particleEvents.length > 0) {
-        const pMsg = JSON.stringify({ type: 'particleSpawn', events: particleEvents });
-        for (const [ws, session] of this.sessions.entries()) {
-          if (session.joined) ws.send(pMsg);
-        }
+        this._safeSend(ws, particleMsg);
       }
     }
+  }
 
-    // ── collision check ──────────────────────────────────────────────────────
+  _checkCollisions(particleEvents) {
+    const all = [...this._activePlayers(), ...this._activeBots()];
 
-    _checkCollisions(particleEvents) {
-      const all = [...this._activePlayers(), ...this.bots.filter(b => b.alive)];
+    for (let i = 0; i < all.length; i++) {
+      const snake = all[i];
+      if (!snake.alive) continue;
 
-      for (let i = 0; i < all.length; i++) {
-        const a = all[i];
-        if (!a.alive) continue;
-        const hx = a.head.x, hy = a.head.y;
+      const hx = snake.head.x;
+      const hy = snake.head.y;
 
-        for (let j = 0; j < all.length; j++) {
-          if (i === j) continue;
-          const b = all[j];
-          const startSeg = b.isPlayer ? 5 : 3;
-          for (let k = startSeg; k < b.segments.length; k++) {
-            const seg = b.segments[k];
-            const dx = hx - seg.x, dy = hy - seg.y;
-            const killDist = (a.width + b.width) * 0.8;
-            if (dx * dx + dy * dy < killDist * killDist) {
-              particleEvents.push({ x: a.head.x, y: a.head.y, color: a.skin.glow, n: 20 });
-              this._killSnake(a);
-              break;
-            }
-          }
-          if (!a.alive) break;
-        }
-      }
-    }
+      for (let j = 0; j < all.length; j++) {
+        if (i === j) continue;
+        const other = all[j];
+        const startSeg = other.isPlayer ? 5 : 3;
 
-    _killSnake(snake) {
-      if (!snake.alive) return;
-      snake.alive = false;
+        for (let k = startSeg; k < other.segments.length; k++) {
+          const segment = other.segments[k];
+          const dx = hx - segment.x;
+          const dy = hy - segment.y;
+          const killDist = (snake.width + other.width) * 0.8;
 
-      // drop orbs
-      for (const seg of snake.segments) {
-        if (Math.random() < 0.25) {
-          this.orbs.push({
-            id: rnd36(),
-            x: seg.x, y: seg.y,
-            r: 6 + Math.random() * 8,
-            color: snake.skin.body,
-            pulse: Math.random() * Math.PI * 2,
-          });
-        }
-      }
-
-      if (snake.isPlayer) {
-        // find ws for this player and notify
-        for (const [ws, session] of this.sessions.entries()) {
-          if (session.id === snake.id) {
-            this._send(ws, { type: 'died', score: snake.score });
+          if (dx * dx + dy * dy < killDist * killDist) {
+            particleEvents.push({ x: snake.head.x, y: snake.head.y, color: snake.skin.glow, n: 20 });
+            this._killSnake(snake);
             break;
           }
         }
-      } else {
-        // respawn bot after delay if room has space
-        setTimeout(() => {
-          if (this._activeEntities() < CONFIG.maxEntities) {
-            this._spawnBot(snake.skinIdx, snake.name);
-          }
-        }, CONFIG.botRespawnDelayMs);
+
+        if (!snake.alive) break;
+      }
+    }
+  }
+
+  _killSnake(snake) {
+    if (!snake || !snake.alive) return;
+
+    snake.alive = false;
+
+    for (const segment of snake.segments) {
+      if (Math.random() < 0.25) {
+        this.orbs.push({
+          id: rnd36(),
+          x: segment.x,
+          y: segment.y,
+          r: 6 + Math.random() * 8,
+          color: snake.skin.body,
+          pulse: Math.random() * Math.PI * 2,
+        });
       }
     }
 
-    // ── bot management ───────────────────────────────────────────────────────
-
-    _activePlayers()  { return [...this.players.values()].filter(s => s.alive); }
-    _activeBots()     { return this.bots.filter(b => b.alive); }
-    _activeEntities() { return this._activePlayers().length + this._activeBots().length; }
-
-    _desiredBotCount() {
-      return Math.max(0, CONFIG.maxEntities - this._activePlayers().length);
-    }
-
-    _canSpawnBot() {
-      return this._activeBots().length < this._desiredBotCount() && this._activeEntities() < CONFIG.maxEntities;
-    }
-
-    _spawnBot(skinIdx, name) {
-      if (!this._canSpawnBot()) return;
-      const pos = spawnPosition();
-      const si = skinIdx !== undefined ? skinIdx : Math.floor(Math.random() * SKINS.length);
-      const nm = name || BOT_NAMES[(Math.random() * BOT_NAMES.length) | 0];
-      const bot = new Snake(`bot_${this.nextBotId++}`, pos.x, pos.y, si, nm, false);
-      bot.length = (20 + Math.random() * 60) | 0;
-      bot.width = Math.min(32, 18 + bot.length / 60);
-      bot.score = Math.max(0, Math.round(bot.length * 0.8));
-      this.bots.push(bot);
-    }
-
-    _fillBots()  { while (this._canSpawnBot()) this._spawnBot(); }
-
-    _trimBots() {
-      const now = Date.now();
-      if (now - this.lastBotTrimAt < CONFIG.botTrimIntervalMs) return;
-      const excess = this._activeBots().length - this._desiredBotCount();
-      if (excess <= 0) return;
-      const toKill = this.bots.find(b => b.alive);
-      if (toKill) { toKill.alive = false; this.lastBotTrimAt = now; }
-    }
-
-    // ── state snapshot ───────────────────────────────────────────────────────
-
-    _buildState() {
-      const all = [...this._activePlayers(), ...this._activeBots()];
-      all.sort((a, b) => b.score - a.score);
-
-      const leaderboard = all.slice(0, 10).map((s, i) => ({
-        id: s.id, name: s.name, score: s.score, rank: i + 1,
-      }));
-
-      const rankMap = new Map(leaderboard.map(e => [e.id, e.rank]));
-
-      const self = {};
-      for (const s of this._activePlayers()) {
-        self[s.id] = { score: s.score, rank: rankMap.get(s.id) || 0, boostE: s.boostE };
+    if (snake.isPlayer) {
+      for (const [ws, session] of this.sessions.entries()) {
+        if (session.id === snake.id) {
+          this._send(ws, { type: 'died', score: snake.score });
+          break;
+        }
       }
+      return;
+    }
 
-      return {
-        world: WORLD,
-        tickMs: CONFIG.tickMs,
-        players: this._activePlayers().map(s => s.getSnapshot()),
-        bots: this._activeBots().map(s => s.getSnapshot()),
-        orbs: this.orbs,
-        leaderboard,
-        self,
+    setTimeout(() => {
+      if (this._activeEntities() < CONFIG.maxEntities) {
+        this._spawnBot(snake.skinIdx, snake.name);
+      }
+    }, CONFIG.botRespawnDelayMs);
+  }
+
+  _activePlayers() {
+    return [...this.players.values()].filter((snake) => snake.alive);
+  }
+
+  _activeBots() {
+    return this.bots.filter((bot) => bot.alive);
+  }
+
+  _activeEntities() {
+    return this._activePlayers().length + this._activeBots().length;
+  }
+
+  _desiredBotCount() {
+    return Math.max(0, CONFIG.maxEntities - this._activePlayers().length);
+  }
+
+  _canSpawnBot() {
+    return this._activeBots().length < this._desiredBotCount() && this._activeEntities() < CONFIG.maxEntities;
+  }
+
+  _spawnBot(skinIdx, name) {
+    if (!this._canSpawnBot()) return;
+
+    const position = spawnPosition();
+    const finalSkinIdx = skinIdx !== undefined ? skinIdx : Math.floor(Math.random() * SKINS.length);
+    const finalName = name || BOT_NAMES[(Math.random() * BOT_NAMES.length) | 0];
+    const bot = new Snake(`bot_${this.nextBotId++}`, position.x, position.y, finalSkinIdx, finalName, false);
+    bot.length = (20 + Math.random() * 60) | 0;
+    bot.width = Math.min(32, 18 + bot.length / 60);
+    bot.score = Math.max(0, Math.round(bot.length * 0.8));
+    this.bots.push(bot);
+  }
+
+  _fillBots() {
+    while (this._canSpawnBot()) {
+      this._spawnBot();
+    }
+  }
+
+  _trimBots() {
+    const now = Date.now();
+    if (now - this.lastBotTrimAt < CONFIG.botTrimIntervalMs) return;
+
+    const excessBots = this._activeBots().length - this._desiredBotCount();
+    if (excessBots <= 0) return;
+
+    const botToTrim = this.bots.find((bot) => bot.alive);
+    if (!botToTrim) return;
+
+    botToTrim.alive = false;
+    this.lastBotTrimAt = now;
+  }
+
+  _buildState() {
+    const all = [...this._activePlayers(), ...this._activeBots()].sort((a, b) => b.score - a.score);
+    const rankMap = new Map();
+    all.forEach((snake, index) => rankMap.set(snake.id, index + 1));
+
+    const leaderboard = all.slice(0, 10).map((snake) => ({
+      id: snake.id,
+      name: snake.name,
+      score: snake.score,
+      rank: rankMap.get(snake.id) || 0,
+    }));
+
+    const self = {};
+    for (const snake of this._activePlayers()) {
+      self[snake.id] = {
+        score: snake.score,
+        rank: rankMap.get(snake.id) || 0,
+        boostE: snake.boostE,
       };
     }
 
-    // ── send helper ──────────────────────────────────────────────────────────
+    return {
+      world: WORLD,
+      tickMs: CONFIG.tickMs,
+      players: this._activePlayers().map((snake) => snake.getSnapshot()),
+      bots: this._activeBots().map((snake) => snake.getSnapshot()),
+      orbs: this.orbs,
+      leaderboard,
+      self,
+    };
+  }
 
-    _send(ws, obj) {
-      try { ws.send(JSON.stringify(obj)); } catch { }
+  _safeSend(ws, payload) {
+    try {
+      ws.send(payload);
+    } catch {
+      this._handleDisconnect(ws);
     }
   }
+
+  _send(ws, obj) {
+    this._safeSend(ws, JSON.stringify(obj));
+  }
+}

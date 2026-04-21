@@ -442,8 +442,11 @@
 
 function connectToRoom() {
   const room = ROOMS[Math.floor(Math.random() * ROOMS.length)];
-
-  const wsUrl = `wss://slither-kerala.razikv-co-in.workers.dev/room?room=${room}`;
+  const baseUrl = new URL(MATCHMAKER_URL);
+  baseUrl.protocol = baseUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+  baseUrl.pathname = '/room';
+  baseUrl.search = `?room=${encodeURIComponent(room)}`;
+  const wsUrl = baseUrl.toString();
 
   console.log('Connecting to room:', room, wsUrl);
 
