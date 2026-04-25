@@ -510,6 +510,7 @@
           localPlayerId = msg.id;
           WORLD = msg.WORLD || WORLD;
           serverTickMs = msg.tickMs || serverTickMs;
+          prediction.active = false;
           break;
         case 'joinDenied':
           alert(msg.message || 'Arena is full right now.');
@@ -524,6 +525,17 @@
           scoreboard = msg.leaderboard || [];
           selfState = msg.self || {};
           reconcileSnakes(msg.players || [], msg.bots || []);
+          
+          // Seed prediction once from first server snapshot
+          if (localPlayerId && !prediction.active) {
+            const _me = snakes.get(localPlayerId);
+            if (_me && _me.network.current) {
+              prediction.x     = _me.network.current.unwrappedX;
+              prediction.y     = _me.network.current.unwrappedY;
+              prediction.angle = _me.network.current.angle;
+              prediction.active = true;
+            }
+          }
           break;
         case 'particleSpawn':
           if (Array.isArray(msg.events))
@@ -532,6 +544,7 @@
           break;
         case 'died':
           gameRunning = false;
+          prediction.active = false;
           document.getElementById('death-screen').style.display = 'flex';
           document.getElementById('death-score').textContent = `Final score: ${msg.score}`;
           break;
@@ -564,8 +577,17 @@
     const MAX_TRAIL_POINTS    = 140;
     const SNAKE_CULL_MARGIN   = 280;
     const ORB_CULL_MARGIN     = 48;
-    const INPUT_SEND_MS       = 50;
-    const INTERPOLATION_BACK  = 100;
+    const INPUT_SEND_MS       = 40;
+    const INTERPOLATION_BACK  = 80;
+
+    // ── Client-side prediction ──────────────────────────────────────
+    const prediction = {
+      x: 0, y: 0,
+      angle: 0,
+      speed: 2.2,
+      reconcileK: 0.18,
+      active: false,
+    };
     const JOYSTICK_RADIUS     = 68; // virtual joystick outer radius
     const JOYSTICK_KNOB       = 26; // knob radius
 
@@ -828,12 +850,48 @@
       }
     }
 
+    // ── Client-side prediction step ─────────────────────────────────────────
+    function stepPrediction(deltaMs) {
+      if (!prediction.active || !localPlayerId) return;
+      const me = snakes.get(localPlayerId);
+      if (!me || !me.network.current) return;
+
+      const dt = Math.min(deltaMs, 50) / 16.67; // normalise to 60fps frames
+
+      // Steer predicted angle toward aim direction
+      // User's aimDX/aimDY is world-relative aim, works for both desktop and mobile
+      let targetAngle = prediction.angle;
+      if (Math.abs(pointer.aimDX) > 4 || Math.abs(pointer.aimDY) > 4 || !IS_TOUCH) {
+        targetAngle = Math.atan2(pointer.aimDY, pointer.aimDX || 0.0001);
+      }
+
+      let diff = targetAngle - prediction.angle;
+      while (diff > Math.PI)  diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      prediction.angle += Math.min(Math.abs(diff), 0.10 * dt) * Math.sign(diff);
+
+      // Move forward
+      const spd = (pointer.boosting ? prediction.speed * 1.75 : prediction.speed) * dt;
+      prediction.x += Math.cos(prediction.angle) * spd;
+      prediction.y += Math.sin(prediction.angle) * spd;
+
+      // Soft reconcile toward authoritative server position
+      const srv = me.network.current;
+      const k   = 1 - Math.pow(1 - prediction.reconcileK, dt);
+      prediction.x = prediction.x + (srv.unwrappedX - prediction.x) * k;
+      prediction.y = prediction.y + (srv.unwrappedY - prediction.y) * k;
+    }
+
     // ─── CAMERA ───────────────────────────────────────────────
     function updateCamera() {
       const me = localPlayerId ? snakes.get(localPlayerId) : null;
-      if (!me || !me.render) return;
-      camera.x += (me.render.x - camera.x) * 0.1;
-      camera.y += (me.render.y - camera.y) * 0.1;
+      if (!me) return;
+      
+      const cx = (prediction.active ? prediction.x : (me.render ? me.render.x : camera.x));
+      const cy = (prediction.active ? prediction.y : (me.render ? me.render.y : camera.y));
+      
+      camera.x += (cx - camera.x) * 0.14;
+      camera.y += (cy - camera.y) * 0.14;
     }
 
     // ─── INPUT ────────────────────────────────────────────────
@@ -1135,12 +1193,13 @@
       if (!gameRunning) return;
       requestAnimationFrame(gameLoop);
 
-      const deltaMs    = Math.min(now - lastFrameTime, 80);
+      const deltaMs    = Math.min(now - lastFrameTime, 100);
       lastFrameTime    = now;
       const ds         = deltaMs / 16.667;
       const renderTime = now - INTERPOLATION_BACK;
 
       updateQuality(now);
+      stepPrediction(deltaMs);
       updateTrails(renderTime);
       updateCamera();
       sendInput(now);
