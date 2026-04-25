@@ -877,9 +877,18 @@
 
       // Soft reconcile toward authoritative server position
       const srv = me.network.current;
-      const k   = 1 - Math.pow(1 - prediction.reconcileK, dt);
-      prediction.x = prediction.x + (srv.unwrappedX - prediction.x) * k;
-      prediction.y = prediction.y + (srv.unwrappedY - prediction.y) * k;
+      const dx = srv.unwrappedX - prediction.x;
+      const dy = srv.unwrappedY - prediction.y;
+      const dist = Math.hypot(dx, dy);
+
+      if (dist > 0.1) {
+        // Dynamic lerp: smooth when close (0.04), faster when far (up to 0.6)
+        // This prevents snapping while ensuring we don't drift too far
+        const dynamicK = Math.min(0.6, 0.04 + (dist * 0.002));
+        const k = 1 - Math.pow(1 - dynamicK, dt);
+        prediction.x += dx * k;
+        prediction.y += dy * k;
+      }
     }
 
     // ─── CAMERA ───────────────────────────────────────────────
