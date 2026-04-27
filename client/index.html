@@ -692,6 +692,7 @@
       opt.style.boxShadow   = `0 0 14px ${skin.glow}66`;
       opt.addEventListener('pointerdown', () => {
         selectedSkin = idx;
+        try { localStorage.setItem('slither_skin', idx); } catch(e) {}
         document.querySelectorAll('.skin-opt').forEach((n,i) => n.classList.toggle('selected', i === idx));
       });
       picker.appendChild(opt);
@@ -1038,7 +1039,7 @@
 
         ctx.strokeStyle=skin.body; ctx.lineWidth=r*2;
         ctx.lineCap='round'; ctx.lineJoin='round';
-        if (!IS_TOUCH) { ctx.shadowColor=skin.glow; ctx.shadowBlur=s.id===localPlayerId?16:10; }
+        if (!IS_TOUCH && s.id === localPlayerId) { ctx.shadowColor=skin.glow; ctx.shadowBlur=16; }
         ctx.stroke();
         ctx.strokeStyle='rgba(255,255,255,0.13)'; ctx.lineWidth=r*0.9;
         ctx.shadowBlur=0; ctx.stroke();
@@ -1048,7 +1049,7 @@
       ctx.beginPath();
       ctx.arc(head.x,head.y,r*1.18,0,Math.PI*2);
       ctx.fillStyle=skin.head;
-      if (!IS_TOUCH) { ctx.shadowColor=skin.glow; ctx.shadowBlur=12; }
+      if (!IS_TOUCH && s.id === localPlayerId) { ctx.shadowColor=skin.glow; ctx.shadowBlur=12; }
       ctx.fill(); ctx.shadowBlur=0;
 
       const a=s.render.angle;
@@ -1365,9 +1366,24 @@
       boostBtn.classList.remove('active');
     }, { passive:false });
 
-    // ─── BUTTONS ──────────────────────────────────────────────
+    // ─── BUTTONS & INIT ───────────────────────────────────────
     document.getElementById('play-btn').addEventListener('click', startGame);
     document.getElementById('respawn-btn').addEventListener('click', startGame);
+
+    // Local Storage Restore
+    try {
+      const savedSkin = parseInt(localStorage.getItem('slither_skin'));
+      if (!isNaN(savedSkin) && savedSkin >= 0 && savedSkin < SKINS.length) {
+        selectedSkin = savedSkin;
+        document.querySelectorAll('.skin-opt').forEach((n,i) => n.classList.toggle('selected', i === selectedSkin));
+      }
+      const savedName = localStorage.getItem('slither_name');
+      if (savedName) document.getElementById('name-input').value = savedName;
+    } catch(e) {}
+
+    document.getElementById('name-input').addEventListener('input', e => {
+      try { localStorage.setItem('slither_name', e.target.value.trim()); } catch(e) {}
+    });
   </script>
 </body>
 </html>
