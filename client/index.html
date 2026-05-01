@@ -704,9 +704,9 @@
 
     function wrapCoord(v)             { return ((v % WORLD) + WORLD) % WORLD; }
     function shortDelta(from, to) {
-      let d = to - from;
+      let d = (to - from) % WORLD;
       if (d >  WORLD/2) d -= WORLD;
-      if (d < -WORLD/2) d += WORLD;
+      else if (d < -WORLD/2) d += WORLD;
       return d;
     }
     function unwrapPos(prev, next) {
@@ -728,8 +728,8 @@
 
     function toScreen(wx, wy) {
       return {
-        x: vw()/2 + shortDelta(camera.x, wrapCoord(wx)),
-        y: vh()/2 + shortDelta(camera.y, wrapCoord(wy)),
+        x: vw()/2 + shortDelta(camera.x, wx),
+        y: vh()/2 + shortDelta(camera.y, wy),
       };
     }
 
@@ -858,12 +858,18 @@
         s.render = { x:r.x, y:r.y, angle:r.angle, length:r.length };
         
         const trail = s.trail;
-        const last  = trail[trail.length-1];
-        const dx = r.x - last.x, dy = r.y - last.y;
         
-        // Push trail segments when we move enough
-        if (dx*dx + dy*dy > 4) trail.push({x:r.x,y:r.y});
-        else trail[trail.length-1] = {x:r.x,y:r.y};
+        // Ensure the very last point is always exactly at the snake's head
+        trail[trail.length-1] = { x: r.x, y: r.y };
+        
+        // Only drop a new permanent trail joint if we've moved far enough from the second-to-last joint
+        if (trail.length >= 2) {
+          const prev = trail[trail.length - 2];
+          const dx = r.x - prev.x, dy = r.y - prev.y;
+          if (dx*dx + dy*dy > 16) trail.push({ x: r.x, y: r.y });
+        } else {
+          trail.push({ x: r.x, y: r.y });
+        }
         
         const maxLen = Math.max(18, Math.ceil(r.length) + 12);
         while (trail.length > Math.min(quality.trailCap, maxLen)) trail.shift();
