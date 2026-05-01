@@ -186,7 +186,7 @@
       left: 0; bottom: 0;
       width: 52%;
       height: 46%;
-      pointer-events: all;
+      pointer-events: none;
       z-index: 6;
       /* visual: semi-transparent pill guide */
     }
@@ -445,7 +445,7 @@
   <div id="joystick-zone"></div>
 
   <!-- Boost button (mobile) -->
-  <div id="boost-btn" id="boost-btn">
+  <div id="boost-btn">
     <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
       <path d="M14 4L22 14H17V24H11V14H6L14 4Z" fill="#f0cb72" opacity="0.9"/>
     </svg>
@@ -838,14 +838,33 @@
     // ─── TRAIL UPDATES ────────────────────────────────────────
     function updateTrails(renderTime) {
       for (const s of snakes.values()) {
-        const r = getRenderedSnake(s.id, renderTime);
+        const isLocal = (s.id === localPlayerId && prediction.active);
+        let r;
+        
+        if (isLocal) {
+          // Use instant local prediction for zero visual lag
+          r = {
+            x: prediction.x,
+            y: prediction.y,
+            angle: prediction.angle,
+            length: s.network.current ? s.network.current.length : 10
+          };
+        } else {
+          // Use interpolated server snapshots for other players
+          r = getRenderedSnake(s.id, renderTime);
+        }
+
         if (!r) continue;
         s.render = { x:r.x, y:r.y, angle:r.angle, length:r.length };
+        
         const trail = s.trail;
         const last  = trail[trail.length-1];
         const dx = r.x - last.x, dy = r.y - last.y;
+        
+        // Push trail segments when we move enough
         if (dx*dx + dy*dy > 4) trail.push({x:r.x,y:r.y});
         else trail[trail.length-1] = {x:r.x,y:r.y};
+        
         const maxLen = Math.max(18, Math.ceil(r.length) + 12);
         while (trail.length > Math.min(quality.trailCap, maxLen)) trail.shift();
       }
