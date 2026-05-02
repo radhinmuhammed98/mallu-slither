@@ -574,10 +574,10 @@
     // Detect touch properly
     const IS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
 
-    const MAX_TRAIL_POINTS    = 140;
+    const MAX_TRAIL_POINTS    = 350;
     const SNAKE_CULL_MARGIN   = 280;
     const ORB_CULL_MARGIN     = 48;
-    const INPUT_SEND_MS       = 0;
+    const INPUT_SEND_MS       = 30;
     const INTERPOLATION_BACK  = 80;
 
     // ── Client-side prediction ──────────────────────────────────────
@@ -827,7 +827,7 @@
 
       quality.orbBudget = averageFps < 40 ? (IS_TOUCH ? 28 : 60) : (IS_TOUCH ? 50 : 100);
       quality.trailStep = averageFps < 40 ? (IS_TOUCH ? 4 : 2)   : (IS_TOUCH ? 2 : 1);
-      quality.trailCap  = averageFps < 40 ? (IS_TOUCH ? 50 : 100) : (IS_TOUCH ? 85 : MAX_TRAIL_POINTS);
+      quality.trailCap  = averageFps < 40 ? (IS_TOUCH ? 120 : 200) : (IS_TOUCH ? 200 : MAX_TRAIL_POINTS);
 
       if (Math.abs(nextScale - quality.renderScale) >= 0.04) {
         quality.renderScale = nextScale;
@@ -871,8 +871,8 @@
           trail.push({ x: r.x, y: r.y });
         }
         
-        const maxLen = Math.max(18, Math.ceil(r.length) + 12);
-        while (trail.length > Math.min(quality.trailCap, maxLen)) trail.shift();
+        const maxLen = Math.max(18, Math.ceil(r.length * 1.5) + 12);
+        while (trail.length > Math.min(isLocal ? maxLen : quality.trailCap, maxLen)) trail.shift();
       }
     }
 
@@ -934,11 +934,8 @@
       if (!gameRunning || !localPlayerId) return;
       if (now - lastInputSentAt < INPUT_SEND_MS) return;
 
-      const pos   = getPointerScreenXY();
-      const dx    = pos.x - vw()/2;
-      const dy    = pos.y - vh()/2;
-      const angle = Math.atan2(dy, dx || 0.0001);
-      wsSend('input', { angle, boosting: pointer.boosting });
+      // Send the smoothed prediction angle instead of raw aim, so releasing the mobile joystick doesn't snap to angle 0.
+      wsSend('input', { angle: prediction.angle, boosting: pointer.boosting });
       lastInputSentAt = now;
     }
 
